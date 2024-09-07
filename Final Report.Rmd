@@ -1,0 +1,496 @@
+a---
+title: "Final Report"
+author: '710032265'
+date: "`r Sys.Date()`"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+# Data Analysis
+```{r Load in libries}
+rm(list = ls())
+library(tidyverse)
+library(ggplot2)
+library(outliers)
+library(fastDummies)
+library(factoextra)
+library(FactoMineR)
+library(survival)
+library(survminer)
+library(randomForest)
+library(fmsb)
+library(rpart)
+library(rpart.plot)
+
+```
+
+## Cleaning the Data
+
+```{r load in the data}
+
+# Import the data
+hr <- read.csv('kaggle_hr_analytics.csv')
+
+#summary(hr)
+glimpse(hr)
+
+```
+
+```{r adding dummy columns}
+
+hr <- dummy_cols(hr, c('salary', 'sales'))
+
+# rename columns
+hr <- hr %>% 
+  rename(department =  sales) %>% 
+  mutate(department = fct_infreq(department))
+
+glimpse(hr)
+
+```
+
+```{r check and remove duplicates}
+
+# Print size of dataframe before removing duplicates
+print(paste0('Size of dataframe BEFORE removing duplicates = ', dim(hr)[1]))
+
+# Identify and print groups with more than 3 observations
+dup_hr <- hr %>%
+  group_by_all() %>%
+  summarize(n = n()) %>%
+  filter(n > 3)
+
+# Remove the values in dup_hr from hr
+hr <- anti_join(hr, dup_hr)
+
+
+# Print size of dataframe after removing duplicates
+print(paste0('Size of dataframe AFTER removing duplicates = ', dim(hr)[1]))
+
+
+```
+
+```{r add ID column}
+
+
+# add an ID column
+hr$ID <- as.character(1:nrow(hr)) 
+
+```
+
+## Plottting the DATA
+
+```{r plots}
+
+ggplot(hr, aes(x = department)) +
+  geom_bar()
+
+```
+
+
+### cluster plot
+```{r plot2}
+
+hr1 <- hr %>% 
+  filter(left == 1) %>% 
+  select(satisfaction_level, last_evaluation)
+
+km1 <- hr1 %>% 
+  kmeans(centers = 3, nstart = 20)
+
+hr1$cluster <- as.character(km1$cluster)
+
+ggplot(hr1, aes(x = satisfaction_level, y = last_evaluation, color = cluster)) +
+  geom_point(alpha = 0.5)
+
+
+
+```
+
+
+
+
+### Survival plot
+```{r Survival plot}
+
+x_surv <- Surv(time = hr$time_spend_company, event = hr$left)
+f_surv <- survfit(x_surv ~ salary, data = hr)
+ggsurvplot(f_surv, data = hr)
+
+hr <- dummy_cols(hr, select_columns = c('salary'))
+f_coxph <- coxph(x_surv ~ satisfaction_level + last_evaluation + number_project + average_montly_hours +
+                   salary_low + salary_medium, data = hr)
+
+
+```
+
+### Radar plot
+```{r radar plot}
+# Define colors_border and colors_in
+colors_border <- c(rgb(0.2,0.5,0.5,0.9), rgb(0.8,0.2,0.5,0.9), rgb(0.7,0.5,0.1,0.9),
+                   rgb(0.5,0.9,0.5,0.9), rgb(0.1,0.5,0.9,0.9))
+colors_in <- c(rgb(0.2,0.5,0.5,0.5), rgb(0.8,0.2,0.5,0.5), rgb(0.7,0.5,0.1,0.5),
+               rgb(0.5,0.9,0.5,0.5), rgb(0.1,0.5,0.9,0.5))
+
+d <- hr %>% 
+  group_by(left) %>% 
+  summarize(satisfaction_level = mean(satisfaction_level),
+            last_evaluation = mean(last_evaluation),
+            number_project = mean(number_project),
+            average_montly_hours = mean(average_montly_hours),
+            time_spend_company = mean(time_spend_company)) %>% 
+  mutate(left = ifelse(left == 1, 'Left', 'Stayed'))
+
+d_max <- hr %>% 
+  select(one_of(c('satisfaction_level','last_evaluation','number_project','average_montly_hours','time_spend_company'))) %>% 
+  summarize_all(max) %>% 
+  mutate(left = 'max')
+
+d_min <- hr %>% 
+  select(one_of(c('satisfaction_level','last_evaluation','number_project','average_montly_hours','time_spend_company'))) %>% 
+  summarize_all(min) %>% 
+  mutate(left = 'min')
+
+d <- bind_rows(d_max, d_min, d) %>% 
+  as.data.frame
+
+rownames(d) <- d$left
+d$left <- NULL
+
+radarchart(d, axistype = 0, 
+           pcol = colors_border, 
+           pfcol = colors_in, 
+           plwd = 3, 
+           plty = 1,
+           cglcol="grey", 
+           cglty=1, 
+           axislabcol="grey", 
+           cglwd=0.8,
+           vlcex=0.8)
+
+
+
+
+```
+
+## Random forest to predict department
+
+```{r random forrest}
+
+
+rf_dept <- randomForest(department ~ satisfaction_level + 
+                                     last_evaluation + 
+                                     number_project + 
+                                     average_montly_hours +
+                                     time_spend_company + 
+                                     Work_accident, 
+      data = hr, ntree = 100)
+
+
+
+```
+
+
+
+
+## Decision tree to predict leaving without satisfaction
+
+```{r fvv}
+
+
+
+
+dt_nosat <- rpart(left ~ ., data = select(hr, -satisfaction_level),
+                  control = rpart.control(maxdepth = 3))
+
+
+rpart.plot(dt_nosat)
+```
+
+
+
+
+
+
+# Specific changes
+```{r Average Last Evalutation plot}
+
+
+library(ggplot2)
+
+# Calculate average last evaluation score for employees who left
+left_avg <- mean(hr$last_evaluation[hr$left == 1])
+
+# Calculate average last evaluation score for employees who stayed
+stay_avg <- mean(hr$last_evaluation[hr$left == 0])
+
+# Create a dataframe for plotting
+avg_df <- data.frame(
+  status = c("Stayed","Left"),
+  avg_score = c(stay_avg,left_avg)
+)
+
+# Plot using ggplot
+ggplot(avg_df, aes(x = status, y = avg_score, fill = status)) +
+  geom_bar(stat = "identity", color = 'black') +
+  labs(title = "Average Last Evaluation Score",
+       y = "Average Score") +
+  scale_fill_manual(values = c("lightgreen", "skyblue")) +
+  ylim(0, 0.75) +
+ theme_light()+
+    theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = c(0.15, 0.8),  # Adjust these values to move the legend
+        legend.justification = c(1.1, 1.1),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 16, face = "bold"))
+
+```
+
+
+```{r pie alternative}
+library(ggplot2)
+
+# Calculate average last evaluation score for employees who left
+left_avg <- mean(hr$last_evaluation[hr$left == 1])
+
+# Calculate average last evaluation score for employees who stayed
+stay_avg <- mean(hr$last_evaluation[hr$left == 0])
+
+# Create a dataframe for plotting
+avg_df <- data.frame(
+  status = c("Left", "Stayed"),
+  avg_score = c(left_avg, stay_avg)
+)
+
+# Plot using ggplot
+ggplot(avg_df, aes(x = "", y = avg_score, fill = status)) +
+  geom_col(width = 1, color = 'black') +  # Change geom_bar to geom_col
+  labs(title = "Average Last Evaluation Score",
+       y = "Average Score") +
+  scale_fill_manual(values = c("lightgreen", "skyblue")) +
+  coord_polar(theta = "y") +  # Convert to polar coordinates
+  theme_light() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 16, face = "bold"))
+
+
+```
+
+
+
+```{r}
+
+library(ggplot2)
+
+# Create a dataframe with left and stayed status
+df_left <- data.frame(status = "Left", last_evaluation = hr$last_evaluation[hr$left == 1])
+df_stayed <- data.frame(status = "Stayed", last_evaluation = hr$last_evaluation[hr$left == 0])
+
+# Plot using ggplot
+ggplot() +
+  geom_histogram(data = df_stayed, aes(x = last_evaluation, fill = status) , color = "black", 
+                 position = "identity", alpha = 1, bins = 8) +
+  
+  
+  geom_histogram(data = df_left, aes(x = last_evaluation, fill = status), color = "black", 
+                 position = "identity", alpha = 0.92, bins = 9)+
+  labs(title = "Last Evaluation Score for Employees Who Left and Stayed",
+       x = "Last Evaluation Score", y = "Count") +
+  scale_fill_manual(values = c("lightgreen", "skyblue")) + 
+  theme_light()+
+    theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = c(0.15, 0.8),  # Adjust these values to move the legend
+        legend.justification = c(1.1, 1.1),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 16, face = "bold"))
+
+```
+
+
+
+```{r dfkbl}
+
+# Combine the dataframes
+combined_df <- rbind(df_stayed, df_left)
+
+# Plot density graph
+ggplot(combined_df, aes(x = last_evaluation, fill = status, color = status)) +
+  geom_density(alpha = 0.7) +
+  geom_density(color = 'black', alpha = 0, size = 0.6) +  # Add black outlines
+  labs(title = "Density Plot of Last Evaluation Score for Employees Who Left and Stayed",
+       x = "Last Evaluation Score", y = "Density") +
+  scale_fill_manual(values = c("lightgreen", "skyblue")) +
+  scale_color_manual(values = c("lightgreen", "skyblue")) +
+  theme_light() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = c(0.15, 0.8),  # Adjust these values to move the legend
+        legend.justification = c(1.1, 1.1),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15),
+        plot.title = element_text(size = 16, face = "bold"))
+
+```
+
+
+
+
+```{r moeny time at the company plot}
+
+library(ggplot2)
+
+#Calculate average last evaluation score for employees who left
+left_sal_high <- sum(hr$salary_high[hr$left == 1])
+left_sal_med <- sum(hr$salary_medium[hr$left == 1])
+left_sal_low <- sum(hr$salary_low[hr$left == 1])
+
+stay_sal_high <- sum(hr$salary_high[hr$left == 0])
+stay_sal_med <- sum(hr$salary_medium[hr$left == 0])
+stay_sal_low <- sum(hr$salary_low[hr$left == 0])
+
+
+stay_data = rbind(stay_sal_high,stay_sal_med,stay_sal_low)
+left_data = rbind(left_sal_high,left_sal_med,left_sal_low)
+
+
+col = c('skyblue','lightgreen','lightpink')
+
+
+# Create pie chart for employees who stayed
+pie(stay_data,
+    col = col,
+    labels = c("High Salary", "Medium Salary", "Low Salary"),
+    main = "Distribution of Salary Levels for Employees Who Stayed")
+
+# Create pie chart for employees who left
+pie(left_data,
+    col = col,
+    labels = c("High Salary", "Medium Salary", "Low Salary"),
+    main = "Distribution of Salary Levels for Employees Who Left")
+```
+
+
+
+
+
+
+```{r nsefijns}
+
+time_spend_left <- hr$time_spend_company[hr$left == 1]
+
+
+data <- data.frame(time_spend_left)
+
+# Plot
+ggplot(data, aes(x = 1:nrow(data), y = salary_time_high_left)) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(x = "Index", y = "Salary Time High Left") +
+  ggtitle("Smooth Line Plot of Salary Time High Left")
+
+```
+
+```{r nsefns}
+
+
+# Example data for time spent in the company and whether they left (1) or stayed (0)
+time_spent <- hr$time_spend_company
+left <- hr$left
+
+# Create a data frame
+data <- data.frame(Time_Spent = time_spent, Left = left)
+
+# Order data by time spent
+data <- data[order(data$Time_Spent), ]
+
+# Split the data into two groups: left and stayed
+left_data <- subset(data, Left == 1)
+stayed_data <- subset(data, Left == 0)
+
+
+
+# Plot
+plot(stayed_data$Time_Spent, 
+     col = "green", 
+     pch = 15, 
+     ylab = "Time Spent in the Company", 
+     xlab = "Number of People", 
+     main = "Scatter Plot of Time Spent in Company",
+     cex = 2.5)
+
+
+points(left_data$Time_Spent, 
+       col = "red", 
+       pch = 15,
+       cex = 2.5)
+
+# Add legend
+legend("topleft", 
+       legend = c("Left", "Stayed"), 
+       col = c("red", "green"), 
+       pch = 19)
+
+
+axis(2, at = seq(0, max(data$Time_Spent), by = 1))
+
+
+```
+
+
+```{r create training data}
+library(dplyr)
+set.seed(42)
+
+
+#use 70% of dataset as training set and 30% as test set
+sample <- sample(c(TRUE, FALSE), nrow(hr), replace=TRUE, prob=c(0.7,0.3))
+train  <- hr[sample, ]
+test   <- hr[!sample, ]
+
+```
+
+
+```{r random forest}
+
+library(randomForest) # random forests
+library(caret)
+
+set.seed(100)
+
+# Fit the random forest model
+rf <- randomForest(left ~ ., 
+                   data = train)
+
+
+par(mfrow = c(1, 1))
+varImpPlot(rf)
+
+```
+
+```{r uncsv}
+
+# Make predictions on test data
+predictions <- predict(rf, test)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
